@@ -56,7 +56,26 @@ const kolom4F = ['Judul', 'Facts', 'Feelings', 'Findings', 'Future'];
 function simpanDrafLokal(c) { try { sessionStorage.setItem(kDraf(), JSON.stringify(c)); } catch (e) {} }
 function autosave() { clearTimeout(autosave.t); autosave.t = setTimeout(() => { const c = {}; kolom4F.forEach(k => { const el = $('#f_' + k); c[k] = el ? el.value : ''; }); simpanDrafLokal(c); const a = $('#autosave'); if (a) a.textContent = '✔ draf tersimpan di perangkat'; }, 400); }
 function toast(m, err) { const t = $('#toast'); t.textContent = m; t.className = 'toast show' + (err ? ' err' : ''); setTimeout(() => t.className = 'toast', 3800); }
-function busy(on, blok = true) { $('#loader').style.display = 'none'; $('#bar').className = on ? 'on' : ''; $('#blok').style.display = on && blok ? 'block' : 'none'; }
+function siapkanUI() {   // app.js mandiri: buat elemen indikator + gayanya bila index.html/style.css yang terpasang masih versi lama
+  if (!$('#bar')) document.body.insertAdjacentHTML('afterbegin', '<div id="bar"></div>');
+  if (!$('#blok')) document.body.insertAdjacentHTML('afterbegin', '<div id="blok"></div>');
+  if (!document.getElementById('gaya-bar')) {
+    const st = document.createElement('style'); st.id = 'gaya-bar';
+    st.textContent = "#bar{position:fixed;top:0;left:0;height:3px;width:100%;z-index:120;overflow:hidden;pointer-events:none}#bar.on::after{content:'';display:block;height:100%;width:40%;background:linear-gradient(90deg,#006194,#D97706);border-radius:3px;animation:barjalan 1s ease-in-out infinite}@keyframes barjalan{0%{transform:translateX(-100%)}100%{transform:translateX(260%)}}#blok{display:none;position:fixed;inset:0;z-index:110;cursor:progress}";
+    document.head.appendChild(st);
+  }
+}
+function busy(on, blok = true) {
+  const l = $('#loader'), b = $('#bar'), k = $('#blok');
+  if (l) l.style.display = 'none'; if (b) b.className = on ? 'on' : ''; if (k) k.style.display = on && blok ? 'block' : 'none';
+}
+// Jaring pengaman: kalau terjadi error saat memuat, tampilkan alasannya di layar (bukan layar kosong)
+window.addEventListener('error', e => {
+  const m = $('#app-container'); if (!m || m.innerHTML.trim()) return;
+  m.innerHTML = `<div class="card" style="max-width:560px;margin:24px auto"><h2>😕 Aplikasi gagal dimuat</h2><p>${esc(e.message)}</p>
+    <p class="mute">Tekan Ctrl+Shift+R. Jika masih sama, pastikan <b>index.html</b>, <b>css/style.css</b> dan <b>js/app.js</b> di GitHub sudah versi terbaru semua.</p></div>`;
+  const l = $('#loader'); if (l) l.style.display = 'none';
+});
 async function go(p, arg) {   // navigasi INSTAN: halaman langsung tampil dari cache; bar tipis hanya jika server > 250ms
   HAL = p; document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.p === p)); window.scrollTo(0, 0);
   const lambat = setTimeout(() => busy(1, false), 250);
@@ -67,6 +86,7 @@ const page = h => $('#app-container').innerHTML = h;
 const periodeLabel = p => p ? new Date(p + '-01').toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '';
 
 window.addEventListener('DOMContentLoaded', async () => {
+  siapkanUI();
   const t = sessionStorage.getItem('cerdas_token');
   if (!t) { busy(0); hangatkan(); return tampilLogin(); }
   S.token = t;
