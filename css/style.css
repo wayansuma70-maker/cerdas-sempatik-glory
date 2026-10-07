@@ -75,3 +75,9 @@ a.avawrap{cursor:pointer;display:inline-flex}
 .tip{background:var(--t);border-radius:16px;padding:10px 14px;font-size:14px;margin:6px 0 10px;color:var(--ink)}
 details.ex{margin:0 0 10px}details.ex summary{cursor:pointer;font-weight:700;color:var(--c)}
 details.ex p{background:#FFFDF7;border:2px dashed var(--c);border-radius:16px;padding:10px 14px;font-style:italic;margin:8px 0 0;font-size:14px}
+
+/* ── Indikator tipis (pengganti layar loading penuh) ── */
+#bar{position:fixed;top:0;left:0;height:3px;width:100%;z-index:120;overflow:hidden;pointer-events:none}
+#bar.on::after{content:'';display:block;height:100%;width:40%;background:linear-gradient(90deg,var(--pri),var(--f2));border-radius:3px;animation:bar 1s ease-in-out infinite}
+@keyframes bar{0%{transform:translateX(-100%)}100%{transform:translateX(260%)}}
+#blok{display:none;position:fixed;inset:0;z-index:110;cursor:progress}
