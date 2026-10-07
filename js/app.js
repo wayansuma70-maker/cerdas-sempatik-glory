@@ -22,20 +22,54 @@ const F4 = [
 const MENU = { murid: [['beranda', 'Beranda'], ['tulis', 'Tulis Cerita (4F)'], ['saya', 'Cerita Saya'], ['profil', 'Foto Profil']],
   guru: [['guru', 'Ruang Guru Wali'], ['profil', 'Foto Profil']], admin: [['admin', 'Panel Admin'], ['guru', 'Cerita Murid'], ['impor', 'Impor Excel'], ['kelola', 'Kelola Data'], ['profil', 'Foto Profil']] };
 
+// ── CACHE KLIEN: tampil INSTAN dari cache, segarkan diam-diam di latar. sessionStorage → hilang saat tab ditutup/logout (aman utk komputer bersama) ──
+let K = {}; try { K = JSON.parse(sessionStorage.getItem('cerdas_k') || '{}'); } catch (e) {}
+let _kt, HAL = '';
+const kk = (a, args) => a + JSON.stringify(args);
+function setK(a, args, data) { K[kk(a, args)] = { data, s: JSON.stringify(data), t: Date.now() }; clearTimeout(_kt); _kt = setTimeout(() => { try { sessionStorage.setItem('cerdas_k', JSON.stringify(K)); } catch (e) { K = {}; } }, 400); }
+function batalCache() { K = {}; sessionStorage.removeItem('cerdas_k'); }
+async function swr(aksi, args, render) {
+  const key = kk(aksi, args), c = K[key], hal = HAL;
+  if (c) { render(c.data); if (Date.now() - c.t < 15000 || S.menunggu) return; }   // cache segar / ada tulis tertunda → tak perlu ke server
+  const p = api(aksi, ...args).then(d => { const sama = c && c.s === JSON.stringify(d); setK(aksi, args, d); if (!c || (!sama && HAL === hal)) render(d); });
+  if (c) p.catch(() => {}); else await p;
+}
+// ── OPTIMISTIC UI: UI sudah berubah; ini hanya sinkron ke server di latar. Gagal → balik() mengembalikan keadaan ──
+function bg(aksi, args, balik) {
+  S.menunggu = (S.menunggu || 0) + 1;
+  api(aksi, ...args).then(() => {}, e => { if (balik) balik(e); }).then(() => { S.menunggu--; if (!S.menunggu) segarkan(); });
+}
+function segarkan() { Object.values(K).forEach(c => c.t = 0); if (['beranda', 'saya', 'guru', 'admin'].includes(HAL)) V[HAL](); }
+// ── Pustaka berat dimuat HANYA saat dibutuhkan ──
+const URL_CHART = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js', URL_XLSX = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', _skrip = {};
+function muatSkrip(u) { return _skrip[u] || (_skrip[u] = new Promise((ok, no) => { const e = document.createElement('script'); e.src = u; e.onload = ok; e.onerror = () => { delete _skrip[u]; no(new Error('Gagal memuat pustaka. Periksa internet.')); }; document.head.appendChild(e); })); }
+function hangatkan() { try { if (CONFIG.GAS_URL.indexOf('script.google.com') > 0) fetch(CONFIG.GAS_URL, { mode: 'no-cors' }); } catch (e) {} }   // bangunkan server saat layar login tampil
+function prefetch() {   // siapkan halaman lain & pustaka saat browser menganggur
+  if (!S.init) return; const r = S.init.user.role;
+  if (r === 'admin') { api('getDataGuru').then(d => setK('getDataGuru', [], d)).catch(() => {}); setTimeout(() => { muatSkrip(URL_CHART).catch(() => {}); muatSkrip(URL_XLSX).catch(() => {}); }, 1500); }
+}
+function cariDebounce(v) { clearTimeout(cariDebounce.t); cariDebounce.t = setTimeout(() => { S.q = v; terapkanCari(); }, 120); }
+function terapkanCari() { const q = (S.q || '').toLowerCase().trim(); document.querySelectorAll('tr[data-q]').forEach(tr => tr.style.display = tr.dataset.q.includes(q) ? '' : 'none'); }
+// ── Draf cerita di perangkat (tidak hilang bila internet putus / halaman dimuat ulang) ──
+const kDraf = () => 'cerdas_draf_' + (S.init && S.init.user.id);
+const kolom4F = ['Judul', 'Facts', 'Feelings', 'Findings', 'Future'];
+function simpanDrafLokal(c) { try { sessionStorage.setItem(kDraf(), JSON.stringify(c)); } catch (e) {} }
+function autosave() { clearTimeout(autosave.t); autosave.t = setTimeout(() => { const c = {}; kolom4F.forEach(k => { const el = $('#f_' + k); c[k] = el ? el.value : ''; }); simpanDrafLokal(c); const a = $('#autosave'); if (a) a.textContent = '✔ draf tersimpan di perangkat'; }, 400); }
 function toast(m, err) { const t = $('#toast'); t.textContent = m; t.className = 'toast show' + (err ? ' err' : ''); setTimeout(() => t.className = 'toast', 3800); }
-const busy = on => $('#loader').style.display = on ? 'flex' : 'none';
-async function go(p, arg) {
-  busy(1);
-  try { await V[p](arg); document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.p === p)); window.scrollTo(0, 0); } catch (e) {}
-  busy(0);
+function busy(on, blok = true) { $('#loader').style.display = 'none'; $('#bar').className = on ? 'on' : ''; $('#blok').style.display = on && blok ? 'block' : 'none'; }
+async function go(p, arg) {   // navigasi INSTAN: halaman langsung tampil dari cache; bar tipis hanya jika server > 250ms
+  HAL = p; document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.p === p)); window.scrollTo(0, 0);
+  const lambat = setTimeout(() => busy(1, false), 250);
+  try { await V[p](arg); } catch (e) {}
+  clearTimeout(lambat); busy(0);
 }
 const page = h => $('#app-container').innerHTML = h;
 const periodeLabel = p => p ? new Date(p + '-01').toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '';
 
 window.addEventListener('DOMContentLoaded', async () => {
-  busy(0); const t = sessionStorage.getItem('cerdas_token');
-  if (!t) return tampilLogin();
-  S.token = t; busy(1);
+  const t = sessionStorage.getItem('cerdas_token');
+  if (!t) { busy(0); hangatkan(); return tampilLogin(); }
+  S.token = t;
   try { await mulai(); } catch (e) { sessionStorage.removeItem('cerdas_token'); S.token = null; tampilLogin(); }
   busy(0);
 });
@@ -77,24 +111,31 @@ async function masuk() {
   const u = $('#lg_u').value.trim(), k = $('#lg_k').value.trim(); if (!u || !k) return toast('Isi data masuk dan kode akses.', 1);
   $('#lg_err').textContent = ''; busy(1);
   try {
-    S.token = (await api('login', S.peran, u, k)).token; sessionStorage.setItem('cerdas_token', S.token);
-    await mulai();
+    batalCache(); const j = await api('login', S.peran, u, k);
+    S.token = j.token; sessionStorage.setItem('cerdas_token', S.token); await mulai(j.awal);
   } catch (e) { const el = $('#lg_err'); if (el) el.textContent = '⚠ ' + ((e && e.message) || 'Tidak bisa terhubung ke server.'); }
   busy(0);
 }
-// Dipakai setelah login maupun saat halaman dimuat ulang dengan sesi yang masih berlaku
-async function mulai() {
-  S.init = await api('getInit'); const me = S.init.user; document.body.classList.remove('is-login');
-  document.querySelector('footer').textContent = '© CERDAS · Platform Refleksi Karakter 4F · ' + CONFIG.SEKOLAH + ' · ' + (S.init.build || '');
-  $('#banner').textContent = '✨ Periode Aktif: ' + periodeLabel(S.init.periode) + ' · Jangan lupa bagikan ceritamu ya! ✨';
-  renderWho();
-  $('#nav').innerHTML = MENU[me.role].map(m => `<a data-p="${m[0]}" onclick="go('${m[0]}')">${m[1]}</a>`).join('');
-  await go(MENU[me.role][0][0]);
+function pasang(r) {   // pasang data awal + isi cache agar halaman pertama tanpa menunggu
+  S.init = r.init; setK('getInit', [], r.init); if (r.guru) setK('getDataGuru', [], r.guru); if (r.admin) setK('getDataAdmin', [], r.admin);
+  const me = r.init.user; document.body.classList.remove('is-login');
+  document.querySelector('footer').textContent = '© CERDAS · Platform Refleksi Karakter 4F · ' + CONFIG.SEKOLAH + ' · ' + (r.init.build || '');
+  $('#banner').textContent = '✨ Periode Aktif: ' + periodeLabel(r.init.periode) + ' · Jangan lupa bagikan ceritamu ya! ✨';
+  renderWho(); $('#nav').innerHTML = MENU[me.role].map(m => `<a data-p="${m[0]}" onclick="go('${m[0]}')">${m[1]}</a>`).join('');
 }
+async function mulai(awal) {
+  const ci = K[kk('getInit', [])]; let r = awal || (ci && { init: ci.data });
+  if (!r) r = await api('muatAwal');
+  pasang(r); await go(MENU[r.init.user.role][0][0]);
+  if (!awal && ci) api('muatAwal').then(pasangBaru).catch(() => {});   // refresh halaman: tampil dari cache, segarkan di latar
+  setTimeout(prefetch, 400);
+}
+function pasangBaru(r) { const c = K[kk('getInit', [])]; if (!c || c.s !== JSON.stringify(r.init)) { pasang(r); segarkan(); } }
 function keluar(auto) {
   if (S.token && !auto) api('logout').catch(() => {});
-  S.token = null; S.init = null; sessionStorage.removeItem('cerdas_token'); tampilLogin();
-  if (auto) toast('Sesi berakhir, silakan masuk lagi.', 1); busy(0);
+  S.token = null; S.init = null; S.menunggu = 0; batalCache();
+  Object.keys(sessionStorage).filter(x => x.startsWith('cerdas_')).forEach(x => sessionStorage.removeItem(x));
+  tampilLogin(); if (auto) toast('Sesi berakhir, silakan masuk lagi.', 1); busy(0);
 }
 
 const draft = () => (S.init.cerita || []).find(c => c.Periode === S.init.periode) || {};
@@ -102,42 +143,43 @@ const terkirim = () => draft().Status && draft().Status !== 'Draft';
 
 const V = {
   async beranda() {
-    S.init = await api('getInit'); const d = draft(), u = S.init.user;
+    await swr('getInit', [], x => { S.init = x; const d = draft(), u = S.init.user;
     page(`<section class="hero"><span class="badge">Kelas ${esc(u.kelas)}</span> <span class="badge">${periodeLabel(S.init.periode)}</span>
       <h1>Halo, ${esc(u.nama)}! 👋</h1><p>Setiap pengalamanmu adalah petualangan berharga. Ceritakan kejadian, perasaan, dan idemu dengan metode 4F!</p>
       <button class="btn" onclick="go('tulis')">${terkirim() ? 'Lihat Ceritamu' : d.Judul ? 'Lanjutkan Cerita' : 'Mulai Menulis Cerita'} →</button></section>
       <div class="grid g4">${F4.map((f, i) => `<div class="card q click" style="--c:var(${f[3]});--t:var(${f[4]})" onclick="go('tulis')">
       <span class="badge"><i class="bi ${f[5]}"></i> Fase ${i + 1}</span><h3>${f[1]}</h3><p class="hint">${f[2]}</p>
-      <b style="color:var(${f[3]})">${d[f[0]] ? '✔ Sudah ditulis' : 'Belum ditulis'}</b></div>`).join('')}</div>${fbCard()}`);
+      <b style="color:var(${f[3]})">${d[f[0]] ? '✔ Sudah ditulis' : 'Belum ditulis'}</b></div>`).join('')}</div>${fbCard()}`); });
   },
   async tulis() {
-    const d = draft(), kunci = terkirim();
+    let d = draft(); const kunci = terkirim();
+    if (!kunci) { try { const l = JSON.parse(sessionStorage.getItem(kDraf()) || 'null'); if (l) d = Object.assign({}, d, l); } catch (e) {} }
     page(`<div class="card"><span class="badge">LEMBAR REFLEKSI DIRI</span><h2>Beri Judul yang Seru untuk Ceritamu 🎨</h2>
-      <input id="f_Judul" maxlength="150" value="${esc(d.Judul)}" placeholder="Contoh: Kerja Kelompok Membuat Poster Kebersihan" ${kunci ? 'disabled' : ''}><p class="hint" style="margin-top:8px">💡 Judul singkat yang menggambarkan kejadian yang kamu ceritakan.</p></div><br>
+      <input id="f_Judul" maxlength="150" oninput="autosave()" value="${esc(d.Judul)}" placeholder="Contoh: Kerja Kelompok Membuat Poster Kebersihan" ${kunci ? 'disabled' : ''}><p class="hint" style="margin-top:8px">💡 Judul singkat yang menggambarkan kejadian yang kamu ceritakan.</p></div><br>
       <div class="grid">${F4.map((f, i) => `<div class="card q" style="--c:var(${f[3]});--t:var(${f[4]})">
       <span class="badge"><i class="bi ${f[5]}"></i> ${i + 1}. ${f[1]}</span><h3 style="margin-top:10px">${f[2]}</h3>
       <div class="tip">💡 <b>Panduan:</b> ${f[6]}</div><details class="ex"><summary>👀 Lihat contoh cerita</summary><p>${f[8]}</p></details>
-      <textarea id="f_${f[0]}" maxlength="2000" placeholder="${esc(f[7])}" oninput="hit('${f[0]}')" ${kunci ? 'disabled' : ''}>${esc(d[f[0]])}</textarea>
+      <textarea id="f_${f[0]}" maxlength="2000" placeholder="${esc(f[7])}" oninput="hit('${f[0]}');autosave()" ${kunci ? 'disabled' : ''}>${esc(d[f[0]])}</textarea>
       <div class="cnt"><span id="h_${f[0]}"></span><span id="c_${f[0]}"></span></div></div>`).join('')}</div>
-      <div class="sticky"><span class="mute" style="margin-right:auto">🛡 Hanya 1x kirim per bulan</span>
+      <div class="sticky"><span class="mute" style="margin-right:auto">🛡 Hanya 1x kirim per bulan · <span id="autosave"></span></span>
       ${kunci ? '<b>Ceritamu sudah terkirim ✅</b>' : `<button class="btn sec" onclick="simpan(false)">Simpan Draf</button><button class="btn" onclick="simpan(true)">Kirim Cerita ke Guru Wali 🚀</button>`}</div>`);
     F4.forEach(f => hit(f[0]));
   },
   async saya() {
-    S.init = await api('getInit'); const l = S.init.cerita;
+    await swr('getInit', [], x => { S.init = x; const l = S.init.cerita;
     page(`<h2>Cerita Saya</h2><div class="grid">${l.length ? l.map(c => `<div class="card"><span class="badge">${periodeLabel(c.Periode)} · ${c.Status}</span>
       <h3>${esc(c.Judul)}</h3>${umpanBalik(c)}
-      <button class="btn sec" onclick="pdf('${c.ID}')"><i class="bi bi-download"></i> Unduh PDF</button></div>`).join('') : '<div class="card">Belum ada cerita. Yuk mulai menulis!</div>'}</div>`);
+      <button class="btn sec" onclick="pdf('${c.ID}')"><i class="bi bi-download"></i> Unduh PDF</button></div>`).join('') : '<div class="card">Belum ada cerita. Yuk mulai menulis!</div>'}</div>`); });
   },
   async guru() {
-    const d = await api('getDataGuru'); S.guru = d;
+    await swr('getDataGuru', [], d => { S.guru = d;
     const n = d.murid.filter(m => m.cerita && m.cerita.Status !== 'Draft').length, r = d.murid.filter(m => m.cerita && m.cerita.Bintang).length;
     page(`<h2>Murid Binaan</h2><p class="mute">Periode ${periodeLabel(d.periode)} · ${n} dari ${d.murid.length} sudah mengirim · ${r} sudah diberi masukan</p>
-      <div class="card" style="overflow:auto"><table><tr><th>Nama</th><th>Kelas</th><th>Judul</th><th>Status</th><th>Bintang</th><th></th></tr>${d.murid.map(m => {
+      <input id="cari" placeholder="🔍 Cari nama / kelas…" value="${esc(S.q || '')}" oninput="cariDebounce(this.value)" style="max-width:360px;margin-bottom:12px"><div class="card" style="overflow:auto"><table><tr><th>Nama</th><th>Kelas</th><th>Judul</th><th>Status</th><th>Bintang</th><th></th></tr>${d.murid.map(m => {
         const c = m.cerita, kirim = c && c.Status !== 'Draft';
-        return `<tr><td>${esc(m.Nama_Murid)}</td><td>${esc(m.Kelas)}</td><td>${c ? esc(c.Judul) : '-'}</td><td>${c ? c.Status : 'Belum menulis'}</td>
+        return `<tr data-q="${esc((m.Nama_Murid + ' ' + m.Kelas).toLowerCase())}"><td>${esc(m.Nama_Murid)}</td><td>${esc(m.Kelas)}</td><td>${c ? esc(c.Judul) : '-'}</td><td>${c ? c.Status : 'Belum menulis'}</td>
         <td style="color:#F59E0B;white-space:nowrap">${c && c.Bintang ? bintangStr(Number(c.Bintang)) : '-'}</td>
-        <td>${kirim ? `<button class="btn ${c.Bintang ? 'sec' : ''}" style="min-height:36px;padding:0 16px" onclick="go('detail','${m.ID}')">${c.Bintang ? 'Ubah Masukan' : 'Beri Masukan'}</button>` : ''}</td></tr>`; }).join('')}</table></div>`);
+        <td>${kirim ? `<button class="btn ${c.Bintang ? 'sec' : ''}" style="min-height:36px;padding:0 16px" onclick="go('detail','${m.ID}')">${c.Bintang ? 'Ubah Masukan' : 'Beri Masukan'}</button>` : ''}</td></tr>`; }).join('')}</table></div>`); terapkanCari(); });
   },
   async detail(id) {
     const m = S.guru.murid.find(x => x.ID === id), c = m.cerita; S.bt = Number(c.Bintang) || 0;
@@ -151,16 +193,15 @@ const V = {
     pilihBintang(S.bt);
   },
   async admin() {
-    const d = await api('getDataAdmin'), k = Object.entries(d.kelas), tot = k.reduce((a, x) => a + x[1].total, 0) || 1;
+    await swr('getDataAdmin', [], d => { const k = Object.entries(d.kelas), tot = k.reduce((a, x) => a + x[1].total, 0) || 1;
     page(`<h2>Panel Administrator</h2><div class="grid g4">${[['Murid', d.murid], ['Guru Wali', d.guru], ['Cerita Terkumpul', d.cerita], ['Partisipasi', Math.round(d.cerita / tot * 100) + '%']]
       .map(x => `<div class="card"><span class="mute">${x[0]}</span><div class="stat">${x[1]}</div></div>`).join('')}</div><br>
       <div class="card"><h3>Pengumpulan Cerita per Kelas (${periodeLabel(d.periode)})</h3><canvas id="ch" height="110"></canvas></div><br>
       <div class="card"><h3>Periode aktif</h3><input id="per" type="month" value="${d.periode}" style="max-width:240px"> <button class="btn" onclick="atur()">Simpan</button></div>`);
-    if (S.chart) S.chart.destroy();
-    S.chart = new Chart($('#ch'), { type: 'bar', data: { labels: k.map(x => x[0]), datasets: [{ label: 'Sudah mengirim (%)', data: k.map(x => Math.round(x[1].sudah / (x[1].total || 1) * 100)), backgroundColor: '#059669', borderRadius: 12 }] }, options: { scales: { y: { max: 100, beginAtZero: true } } } });
+    muatSkrip(URL_CHART).then(() => { if (S.chart) S.chart.destroy(); S.chart = new Chart($('#ch'), { type: 'bar', data: { labels: k.map(x => x[0]), datasets: [{ label: 'Sudah mengirim (%)', data: k.map(x => Math.round(x[1].sudah / (x[1].total || 1) * 100)), backgroundColor: '#059669', borderRadius: 12 }] }, options: { scales: { y: { max: 100, beginAtZero: true } } } }); }).catch(() => {}); });
   },
   async kelola() {
-    const d = await api('getDataAdmin'), kl = Object.keys(d.kelas).filter(Boolean).sort();
+    await swr('getDataAdmin', [], d => { const kl = Object.keys(d.kelas).filter(Boolean).sort();
     const kartu = (j, n, opsi, ph, extra) => `<div class="card"><h3>Data ${j === 'Murid' ? 'Murid Binaan' : 'Guru Wali'} (${n})</h3>
       <select id="${j}_m" onchange="modeHapus('${j}')" style="width:100%;padding:12px;border-radius:16px;border:2px solid var(--line)">${opsi}</select><br><br>
       ${j === 'Murid' ? `<select id="Murid_k" style="display:none;width:100%;padding:12px;border-radius:16px;border:2px solid var(--line)">${kl.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select>` : ''}
@@ -170,7 +211,7 @@ const V = {
     page(`<h2>Kelola Data</h2><p class="mute">Salah unggah? Hapus datanya, lalu impor ulang (guru dulu, baru murid). Penghapusan tidak bisa dibatalkan.</p><div id="kmsg"></div><div class="grid g2">
       ${kartu('Murid', d.murid, '<option value="semua">Semua murid</option><option value="kelas">Per kelas</option><option value="satu">Satu murid (NIS)</option>', 'NIS murid',
         '<label style="font-size:14px"><input type="checkbox" id="Murid_c" style="width:auto;display:inline;margin-right:8px">Ikut hapus cerita murid yang dihapus</label><br><br>')}
-      ${kartu('Guru', d.guru, '<option value="semua">Semua guru</option><option value="satu">Satu guru (email)</option>', 'Email guru', '')}</div><div id="lihat"></div>`);
+      ${kartu('Guru', d.guru, '<option value="semua">Semua guru</option><option value="satu">Satu guru (email)</option>', 'Email guru', '')}</div><div id="lihat"></div>`); });
   },
   async profil() {
     const u = S.init.user; S.foto = null;
@@ -190,12 +231,19 @@ const V = {
 };
 
 function hit(k) { const t = $('#f_' + k), n = t.value.length; $('#c_' + k).textContent = n + ' / 2000 karakter'; $('#h_' + k).textContent = n ? '✔ Terisi' : ''; }
-async function simpan(kirim) {
-  const c = {}; ['Judul', 'Facts', 'Feelings', 'Findings', 'Future'].forEach(k => c[k] = $('#f_' + k).value);
-  if (kirim && !confirm('Kirim cerita ke Guru Wali? Setelah dikirim tidak bisa diubah.')) return;
-  busy(1);
-  try { await api('simpanCerita', c, kirim); S.init = await api('getInit'); toast(kirim ? 'Hore! Ceritamu terkirim 🚀' : 'Draf tersimpan ✔'); if (kirim) await go('beranda'); } catch (e) {}
-  busy(0);
+function simpan(kirim) {
+  const c = {}; kolom4F.forEach(k => c[k] = $('#f_' + k).value);
+  if (kirim) {
+    if (kolom4F.some(k => !c[k].trim())) return toast('Lengkapi judul dan semua bagian 4F sebelum mengirim.', 1);
+    if (!confirm('Kirim cerita ke Guru Wali? Setelah dikirim tidak bisa diubah.')) return;
+  }
+  const lama = JSON.parse(JSON.stringify(S.init.cerita || [])), d = draft();
+  // 1) UI berubah SEKETIKA
+  const baru = Object.assign({ ID: d.ID || 'tmp', Periode: S.init.periode, Komentar_Guru: '', Nilai: '', Bintang: '' }, d, c, { Status: kirim ? 'Terkirim' : 'Draft' });
+  S.init.cerita = (S.init.cerita || []).filter(x => x.Periode !== S.init.periode).concat(baru); setK('getInit', [], S.init);
+  simpanDrafLokal(c); toast(kirim ? 'Hore! Ceritamu terkirim 🚀' : 'Draf tersimpan ✔'); if (kirim) { sessionStorage.removeItem(kDraf()); go('beranda'); }
+  // 2) Sinkron ke server di latar belakang; gagal → kembalikan
+  bg('simpanCerita', [c, kirim], () => { S.init.cerita = lama; setK('getInit', [], S.init); simpanDrafLokal(c); if (kirim) { toast('Gagal mengirim — ceritamu kembali menjadi draf, coba lagi.', 1); go('tulis'); } });
 }
 const LAB = ['', 'Perlu bimbingan', 'Cukup', 'Baik', 'Sangat baik', 'Luar biasa!'];
 const bintangStr = n => '★'.repeat(n) + '☆'.repeat(5 - n);
@@ -203,11 +251,12 @@ function pilihBintang(n) {
   S.bt = n; $('#stars').innerHTML = [1, 2, 3, 4, 5].map(i => `<span onclick="pilihBintang(${i})" style="color:${i <= n ? '#F59E0B' : '#CBD5E1'}">★</span>`).join('');
   $('#stlab').textContent = n ? n + ' bintang · ' + LAB[n] : 'Ketuk bintang untuk memberi nilai';
 }
-async function nilai(id) {
+function nilai(id) {
   if (!S.bt) return toast('Pilih bintang 1–5 dulu.', 1);
-  busy(1);
-  try { await api('nilaiCerita', id, S.bt, $('#kom').value, $('#nilai').value); await go('guru'); toast('Masukan & bintang terkirim ke murid ✔'); } catch (e) {}
-  busy(0);
+  const bt = S.bt, kom = $('#kom').value, ang = $('#nilai').value, d = S.guru, lama = JSON.stringify(d), m = d.murid.find(x => x.cerita && x.cerita.ID === id); if (!m) return;
+  Object.assign(m.cerita, { Bintang: bt, Komentar_Guru: kom, Nilai: ang === '' ? '' : Number(ang), Status: 'Sudah Dinilai' });
+  setK('getDataGuru', [], d); toast('Masukan & bintang terkirim ke murid ✔'); go('guru');
+  bg('nilaiCerita', [id, bt, kom, ang], () => { S.guru = JSON.parse(lama); setK('getDataGuru', [], S.guru); go('guru'); });
 }
 // Tampilan umpan balik di sisi murid
 function umpanBalik(c) {
@@ -217,7 +266,7 @@ function fbCard() {
   const f = (S.init.cerita || []).find(c => c.Bintang);
   return f ? `<br><div class="card q" style="--c:var(--f2)"><h3>💌 Masukan terbaru dari Guru Wali</h3><b>${esc(f.Judul)}</b>${umpanBalik(f)}</div>` : '';
 }
-async function atur() { busy(1); try { await api('aturPeriode', $('#per').value); S.init.periode = $('#per').value; toast('Periode diperbarui'); } catch (e) {} busy(0); }
+async function atur() { busy(1); try { await api('aturPeriode', $('#per').value); batalCache(); S.init.periode = $('#per').value; toast('Periode diperbarui'); } catch (e) {} busy(0); }
 async function pdf(id) {
   busy(1);
   try {
@@ -231,9 +280,9 @@ async function impor(jenis) {
   if (f.size > 10 * 1024 * 1024) return toast('Maksimal 10MB.', 1);
   busy(1);
   try {
-    const wb = XLSX.read(await f.arrayBuffer()), rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '', raw: false });
+    await muatSkrip(URL_XLSX); const wb = XLSX.read(await f.arrayBuffer()), rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '', raw: false });
     const r = await api('importData', jenis, rows.filter(x => Object.values(x).some(v => String(v).trim())).map(x => { const o = {}; Object.keys(x).forEach(k => o[kanon(jenis, k)] = x[k]); return o; }), $('#ul_' + jenis).checked);
-    S.kode = r.kode.map(x => [x.nama, x.user, x.kode]);
+    batalCache(); S.kode = r.kode.map(x => [x.nama, x.user, x.kode]);
     $('#hasil').innerHTML = `<br><div class="card"><h3>Hasil impor ${jenis}</h3><p>Baru: <b>${r.baru}</b> · Diperbarui: <b>${r.ubah}</b> · Ditolak: <b>${r.tolak.length}</b></p>${r.tolak.map(esc).join('<br>')}
       ${r.kode.length ? `<p><b>Kode akses (hanya tampil sekali, simpan sekarang!):</b></p><button class="btn" onclick="unduhKode('${jenis}')"><i class="bi bi-download"></i> Unduh Daftar Kode (CSV)</button>
       <div style="overflow:auto;max-height:340px;margin-top:12px"><table><tr><th>Nama</th><th>${jenis === 'Murid' ? 'NIS' : 'Email'}</th><th>Kode Akses</th></tr>${S.kode.map(x => `<tr><td>${esc(x[0])}</td><td>${esc(x[1])}</td><td><b>${esc(x[2])}</b></td></tr>`).join('')}</table></div>` : '<p class="mute">Tidak ada kode baru. Centang "Buat ulang kode akses" jika ingin menerbitkan kode baru.</p>'}</div>`;
@@ -252,7 +301,8 @@ async function reset() {
 }
 
 /** Unduh template .xlsx: sheet "Data" (hanya judul kolom, siap diisi) + sheet "Petunjuk" (aturan & contoh). */
-function template(j) {
+async function template(j) {
+  try { await muatSkrip(URL_XLSX); } catch (e) { return toast(e.message, 1); }
   const T = {
     Guru: { h: ['Nama_Guru', 'Email_Akun', 'Kelas_Binaan'], p: [
       ['PETUNJUK PENGISIAN DATA GURU WALI'], [''],
@@ -291,7 +341,7 @@ async function hapus(j) {
   kmsg('⏳ Menghapus data, mohon tunggu…'); busy(1);
   try {
     const r = await api('hapusData', j, mode, nilai, j === 'Murid' && $('#Murid_c').checked);
-    await go('kelola'); kmsg('✅ ' + r.terhapus + ' data ' + j + ' berhasil dihapus' + (r.cerita ? ', ' + r.cerita + ' cerita ikut dihapus' : '') + '.');
+    batalCache(); await go('kelola'); kmsg('✅ ' + r.terhapus + ' data ' + j + ' berhasil dihapus' + (r.cerita ? ', ' + r.cerita + ' cerita ikut dihapus' : '') + '.');
   } catch (e) {
     kmsg('❌ Gagal menghapus: ' + esc((e && e.message) || 'tidak bisa terhubung ke server') + '. Jika pesannya "Script function not found: hapusData", berarti Kode.gs belum diperbarui / belum di-deploy versi baru.', 1);
   }
@@ -332,13 +382,12 @@ function pilihFoto(el) {
   };
   rd.readAsDataURL(f);
 }
-async function kirimFoto() {
-  if (!S.foto) return; busy(1);
-  try { await api('simpanFoto', S.foto); S.init.user.foto = S.foto; renderWho(); toast('Foto profil tersimpan ✔'); $('#fs').disabled = true; } catch (e) {}
-  busy(0);
+function kirimFoto() {
+  if (!S.foto) return; const lama = S.init.user.foto, f = S.foto;
+  S.init.user.foto = f; setK('getInit', [], S.init); renderWho(); toast('Foto profil tersimpan ✔'); $('#fs').disabled = true;
+  bg('simpanFoto', [f], () => { S.init.user.foto = lama; setK('getInit', [], S.init); renderWho(); const pv = $('#pv'); if (pv) pv.innerHTML = avatarHtml(140); });
 }
-async function hapusFoto() {
-  busy(1);
-  try { await api('simpanFoto', ''); S.init.user.foto = ''; S.foto = null; renderWho(); $('#pv').innerHTML = avatarHtml(140); toast('Foto profil dihapus'); } catch (e) {}
-  busy(0);
+function hapusFoto() {
+  const lama = S.init.user.foto; S.init.user.foto = ''; S.foto = null; setK('getInit', [], S.init); renderWho(); $('#pv').innerHTML = avatarHtml(140); toast('Foto profil dihapus');
+  bg('simpanFoto', [''], () => { S.init.user.foto = lama; setK('getInit', [], S.init); renderWho(); const pv = $('#pv'); if (pv) pv.innerHTML = avatarHtml(140); });
 }
